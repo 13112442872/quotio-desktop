@@ -990,6 +990,31 @@ async fn refresh_quotas(
     app: AppHandle,
     state: State<'_, DesktopState>,
 ) -> Result<AppState, String> {
+    // Remote Proxy: query the accounts that live on the remote CPA via its
+    // Management API. No local ~/.cli-proxy-api files or local CPA process are
+    // involved, and OAuth tokens stay on the remote server.
+    let remote_client = {
+        let mut core = lock_core(&state.core);
+        if core.is_remote_connection() {
+            Some(
+                core.management_client()
+                    .map_err(|error| error.to_string())?,
+            )
+        } else {
+            None
+        }
+    };
+    if let Some(client) = remote_client {
+        let quotas = quotio_core::remote_quota::fetch_remote_codex_quotas(&client)
+            .await
+            .map_err(|error| format!("远程额度刷新失败：{error}"))?;
+        for account in &quotas {
+            let _ = app.emit("quota-account", account);
+        }
+        let mut core = lock_core(&state.core);
+        return Ok(core.set_quotas(quotas));
+    }
+
     // Resolve the user-configured upstream proxy under a short lock, then release
     // it so the (blocking, multi-provider) network fetch never holds the core
     // mutex or freezes the UI. Provider requests route through that proxy (like
@@ -1760,6 +1785,19 @@ fn spawn_usage_collector(app: AppHandle) {
 /// 锁外全量拉一次配额 → 存入 + 跑一轮智能调度；池子有变化则通知前端。
 /// 给后台触发器用（5h 窗口到点 / 目标账号请求失败），不依赖前端轮询。
 fn refresh_quotas_and_reschedule(app: &AppHandle) {
+    let remote = app
+        .try_state::<DesktopState>()
+        .and_then(|state| {
+            state
+                .core
+                .lock()
+                .ok()
+                .map(|core| core.is_remote_connection())
+        })
+        .unwrap_or(false);
+    if remote {
+        return;
+    }
     let proxy_url = app.try_state::<DesktopState>().and_then(|state| {
         state
             .core

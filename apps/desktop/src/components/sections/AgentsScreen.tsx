@@ -127,6 +127,17 @@ type CodexReasoningCatalogState = {
   error: boolean;
 };
 
+function remoteApiBase(appState: AppState): string {
+  let url = (appState.settings.remote_endpoint_url ?? "").trim().replace(/\/+$/, "");
+  for (const suffix of ["/v0/management", "/v0", "/v1"]) {
+    if (url.toLowerCase().endsWith(suffix)) {
+      url = url.slice(0, -suffix.length).replace(/\/+$/, "");
+      break;
+    }
+  }
+  return url;
+}
+
 function newProfileId(): string {
   try {
     if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -283,6 +294,7 @@ export function AgentsScreen({
   };
   const BUILTIN_PROVIDERS = new Set(["codex", "claude", "copilot", "antigravity", "kiro", "glm", "trae"]);
   const codexKeyIssue = (profile: CodexLaunchProfile): string | null => {
+    if (appState.settings.connection_mode === "remote") return null;
     const key = profile.api_key.trim();
     if (!key) return null;
     const bound = (appState.api_key_bindings ?? []).find((binding) => binding.api_key === key)?.provider_id ?? "";
@@ -378,10 +390,16 @@ export function AgentsScreen({
       dream_skin_enabled: false,
       dream_skin_theme_id: "dream",
       bound_account: "",
-      proxy_url: appState.proxy.endpoint || "",
+      proxy_url:
+        appState.settings.connection_mode === "remote"
+          ? remoteApiBase(appState)
+          : appState.proxy.endpoint || "",
       model: "",
       reasoning: "high",
-      api_key: "",
+      api_key:
+        appState.settings.connection_mode === "remote"
+          ? (appState.management.api_keys?.[0] ?? "")
+          : "",
     });
   }
 
@@ -461,7 +479,7 @@ export function AgentsScreen({
       setLaunchMsg({ ok: false, text: t("agents.launch.needName", "请填写方案名称") });
       return;
     }
-    if (!profileDraft.bound_account.trim()) {
+    if (appState.settings.connection_mode !== "remote" && !profileDraft.bound_account.trim()) {
       setLaunchMsg({ ok: false, text: t("agents.launch.needAccount", "请选择要绑定的 Codex 账号") });
       return;
     }
@@ -679,7 +697,11 @@ export function AgentsScreen({
                   </div>
                   <div className="scheme-field">
                     <div className="field-label"><Icon name="user" />{t("agents.launch.account", "账号")}</div>
-                    <div className="field-value">{accountEmail(profile.bound_account)}</div>
+                    <div className="field-value">
+                      {appState.settings.connection_mode === "remote"
+                        ? t("settings.remoteProxy", "远程 CPA")
+                        : accountEmail(profile.bound_account)}
+                    </div>
                   </div>
                   <div className="scheme-field">
                     <div className="field-label"><Icon name="cube" />{t("agents.codexModel", "模型")}</div>
@@ -887,7 +909,13 @@ export function AgentsScreen({
                 <Select
                   value={profileDraft.bound_account}
                   options={[
-                    { value: "", label: t("agents.launch.accountPick", "选择一个 Codex 账号") },
+                    {
+                      value: "",
+                      label:
+                        appState.settings.connection_mode === "remote"
+                          ? t("agents.launch.remoteNoAccount", "远程 CPA（无需绑定本地账号）")
+                          : t("agents.launch.accountPick", "选择一个 Codex 账号"),
+                    },
                     ...codexAccounts.map((account) => ({
                       value: account.key,
                       label: account.disabled ? `${account.email}（已禁用）` : account.email,

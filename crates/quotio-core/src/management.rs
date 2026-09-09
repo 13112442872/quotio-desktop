@@ -77,6 +77,28 @@ impl ManagementApiClient {
         decode_auth_files_response(&body)
     }
 
+    /// Fetch the raw `/auth-files` entries without discarding provider-specific
+    /// metadata. Remote Codex quota inspection needs `chatgpt_account_id` and
+    /// `plan_type`, which are intentionally not part of the generic `AuthFile`.
+    pub async fn fetch_auth_files_raw(&self) -> Result<Vec<serde_json::Value>, ManagementApiError> {
+        let body = self.request("GET", "/auth-files", None)?;
+        let value: serde_json::Value = serde_json::from_str(&body)
+            .map_err(|error| ManagementApiError::Json(error.to_string()))?;
+        match value {
+            serde_json::Value::Array(items) => Ok(items),
+            serde_json::Value::Object(mut object) => match object.remove("files") {
+                Some(serde_json::Value::Array(items)) => Ok(items),
+                Some(_) => Err(ManagementApiError::Json(
+                    "auth-files.files 不是数组".to_string(),
+                )),
+                None => Ok(Vec::new()),
+            },
+            _ => Err(ManagementApiError::Json(
+                "auth-files 响应格式无效".to_string(),
+            )),
+        }
+    }
+
     pub async fn fetch_usage_stats(&self) -> Result<UsageStats, ManagementApiError> {
         self.get_json("/usage")
     }

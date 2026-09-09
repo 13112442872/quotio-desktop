@@ -11,6 +11,8 @@ pub mod management;
 pub mod native_oauth;
 pub mod proxy_download;
 pub mod quota;
+pub mod remote_codex;
+pub mod remote_quota;
 pub mod scheduler;
 pub mod tunnel;
 pub mod usage_store;
@@ -1284,6 +1286,12 @@ impl AppCore {
                 ManagementCoreError::Unavailable("找不到该启动方案，请刷新后重试".to_string())
             })?;
 
+        // Remote Proxy 模式不启动本地 CLIProxyAPI，也不要求/注入本地 CPA 账号。
+        // 只临时改写 Codex config.toml 指向远程 CPA，然后沿用现有启动/停止恢复事务。
+        if self.is_remote_connection() {
+            return self.codex_start_remote_unlocked(profile);
+        }
+
         // 已经在跑：同一套幂等返回；不同套（或只有旧备份）先完整清理再起新的。
         if self.codex_active() {
             if codex_runtime_satisfies_start(
@@ -1621,7 +1629,12 @@ impl AppCore {
     /// 拉取代理真实模型所需的参数（推理端点 + 一个 api-key）。
     /// 单独取出来，让命令层在拿到后释放锁再发 HTTP，避免阻塞期间一直持锁。
     pub fn codex_model_fetch_params(&self) -> (String, String) {
-        let endpoint = self.proxy.state.endpoint.clone();
+        let endpoint = if self.is_remote_connection() {
+            self.remote_api_base_url()
+                .unwrap_or_else(|| self.proxy.state.endpoint.clone())
+        } else {
+            self.proxy.state.endpoint.clone()
+        };
         let api_key = self
             .management_snapshot
             .api_keys
