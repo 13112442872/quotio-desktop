@@ -9,7 +9,7 @@ use std::{collections::BTreeMap, thread, time::Duration};
 
 use quotio_types::{
     AgentConfigMode, AgentConfigStorageOption, AgentConfigurationRequest, AgentSetupMode,
-    CodexLaunchProfile, ConnectionMode, ModelSlot,
+    ApiKeysResponse, CodexLaunchProfile, ConnectionMode, ModelSlot,
 };
 
 use crate::{
@@ -27,6 +27,66 @@ pub(crate) fn normalize_remote_api_base(value: &str) -> String {
         }
     }
     url
+}
+
+/// Read the current client API keys directly from a Remote CPA management API.
+///
+/// Quota refresh and management-snapshot refresh are intentionally separate in
+/// Quotio. That means Remote quota can already work while `management_snapshot`
+/// is still empty (for example immediately after startup, before the 5-minute
+/// management poll). Codex quick mode must not depend on that UI cache: when the
+/// user selects "auto key", resolve it from the remote management endpoint at
+/// launch time and only fall back to the cached snapshot if the live read fails.
+fn fetch_remote_api_keys_now(core: &AppCore) -> Result<Vec<String>, ManagementCoreError> {
+    let management_key = core
+        .settings
+        .remote_management_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(crate::secure_remote_management_key)
+        .ok_or_else(|| {
+            ManagementCoreError::Unavailable("远程管理接口密钥未配置。".to_string())
+        })?;
+
+    let base = core.settings.management_endpoint();
+    let url = format!("{}/api-keys", base.trim_end_matches('/'));
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(15))
+        .timeout_read(Duration::from_secs(15))
+        .build();
+    let response = agent
+        .get(&url)
+        .set("Authorization", &format!("Bearer {management_key}"))
+        .set("Accept", "application/json")
+        .call();
+
+    let body = match response {
+        Ok(response) => response.into_string().map_err(|error| {
+            ManagementCoreError::Unavailable(format!("读取远程 CPA API Key 失败：{error}"))
+        })?,
+        Err(ureq::Error::Status(status, _)) => {
+            return Err(ManagementCoreError::Unavailable(format!(
+                "读取远程 CPA API Key 失败：HTTP {status}"
+            )))
+        }
+        Err(error) => {
+            return Err(ManagementCoreError::Unavailable(format!(
+                "读取远程 CPA API Key 失败：{error}"
+            )))
+        }
+    };
+
+    let response: ApiKeysResponse = serde_json::from_str(&body).map_err(|error| {
+        ManagementCoreError::Unavailable(format!("解析远程 CPA API Key 失败：{error}"))
+    })?;
+    Ok(response
+        .api_keys
+        .into_iter()
+        .map(|key| key.trim().to_string())
+        .filter(|key| !key.is_empty())
+        .collect())
 }
 
 impl AppCore {
@@ -86,16 +146,27 @@ impl AppCore {
         let api_key = if !profile.api_key.trim().is_empty() {
             profile.api_key.trim().to_string()
         } else {
-            self.management_snapshot
-                .api_keys
-                .first()
-                .cloned()
-                .unwrap_or_default()
+            // "自动"必须在真正启动时向远程 CPA 取当前第一把 key，不能只依赖
+            // management_snapshot。额度刷新走的是独立路径，所以会出现“额度正常、
+            // snapshot 还没刷新、自动 key 为空”的窗口期。实时读取失败时才回退缓存。
+            match fetch_remote_api_keys_now(self) {
+                Ok(keys) => {
+                    let first = keys.first().cloned().unwrap_or_default();
+                    self.management_snapshot.api_keys = keys;
+                    first
+                }
+                Err(live_error) => self
+                    .management_snapshot
+                    .api_keys
+                    .iter()
+                    .find(|key| !key.trim().is_empty())
+                    .map(|key| key.trim().to_string())
+                    .ok_or(live_error)?,
+            }
         };
         if api_key.is_empty() {
             return Err(ManagementCoreError::Unavailable(
-                "未获取到远程 CPA API Key：请先刷新远程管理状态，或在方案中填写 API Key"
-                    .to_string(),
+                "远程 CPA 当前没有可用 API Key，请先在远程 CPA 中添加 API Key".to_string(),
             ));
         }
 
