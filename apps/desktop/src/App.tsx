@@ -136,7 +136,12 @@ function App() {
         onStartOAuth={app.startOAuth}
         onPollOAuth={app.pollOAuth}
         onRefreshProxyUrlDraft={manualRefresh(() => app.refreshProxyUrlDraft())}
-        onRefreshAgentStatuses={manualRefresh(() => app.refreshAgentStatuses())}
+        onRefreshAgentStatuses={manualRefresh(async () => {
+          await app.refreshAgentStatuses();
+          if (app.appState?.settings.connection_mode === "remote") {
+            await app.runManagementStateAction("refresh_management_state");
+          }
+        })}
         onReadAgentConfiguration={app.readAgentConfiguration}
         onConfigureAgent={app.configureAgent}
         onListAgentBackups={app.listAgentBackups}
