@@ -773,15 +773,15 @@ function AboutScreen({
             <p className="about-tagline">{t("about.tagline", "多服务商 AI 代理与额度管理工具")}</p>
             {roseMode ? (
               <div className="about-actions">
-                <button type="button" onClick={() => void openAboutLink("https://github.com/xiaocoss/quotio-desktop")}>
+                <button type="button" onClick={() => void openAboutLink("https://github.com/13112442872/quotio-desktop")}>
                   {t("about.link.home", "项目主页")}
                   <AboutIcon id="external" />
                 </button>
-                <button type="button" onClick={() => void openAboutLink("https://github.com/xiaocoss/quotio-desktop#readme")}>
+                <button type="button" onClick={() => void openAboutLink("https://github.com/13112442872/quotio-desktop#readme")}>
                   <AboutIcon id="help" />
                   {t("about.link.help", "使用帮助")}
                 </button>
-                <button type="button" onClick={() => void openAboutLink("https://github.com/xiaocoss/quotio-desktop/blob/main/LICENSE")}>
+                <button type="button" onClick={() => void openAboutLink("https://github.com/13112442872/quotio-desktop/blob/main/LICENSE")}>
                   <AboutIcon id="code" />
                   {t("about.link.license", "开源许可")}
                 </button>

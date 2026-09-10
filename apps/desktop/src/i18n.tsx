@@ -6,8 +6,21 @@ export type Locale = "en" | "zh";
 /// translation locale. Chinese variants share the simplified dictionary; other
 /// languages fall back to English until their dictionaries are added.
 export function resolveLocale(language: string | undefined | null): Locale {
-  if (!language) return "en";
-  return language.toLowerCase().startsWith("zh") ? "zh" : "en";
+  const configured = (language ?? "").trim().toLowerCase();
+  let candidate = configured;
+
+  if (!candidate || candidate === "system") {
+    if (typeof navigator !== "undefined") {
+      const preferred = Array.isArray(navigator.languages)
+        ? navigator.languages.find((value) => typeof value === "string" && value.trim().length > 0)
+        : undefined;
+      candidate = (preferred ?? navigator.language ?? "").trim().toLowerCase();
+    } else {
+      candidate = "";
+    }
+  }
+
+  return candidate.startsWith("zh") ? "zh" : "en";
 }
 
 const en: Record<string, string> = {

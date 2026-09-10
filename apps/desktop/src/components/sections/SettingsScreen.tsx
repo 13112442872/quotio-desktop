@@ -410,7 +410,13 @@ export function SettingsScreen({
                   type={showRemoteKey ? "text" : "password"}
                   value={connDraft.remote_management_key}
                   onChange={(event) => setConnDraft({ ...connDraft, remote_management_key: event.target.value })}
-                  placeholder={credentialStatus.remote_management_key_masked ?? "保存后迁入安全存储"}
+                  placeholder={
+                          settings.connection_mode === "remote"
+                            ? credentialStatus.remote_management_key_masked
+                              ? `已保存远程密钥：${credentialStatus.remote_management_key_masked}`
+                              : "输入远程 CPA 管理密钥"
+                            : "仅远程代理模式使用"
+                        }
                 />
                 <button
                   className="sr-secret-toggle"
