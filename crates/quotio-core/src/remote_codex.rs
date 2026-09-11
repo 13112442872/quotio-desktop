@@ -5,7 +5,7 @@
 //! login (`~/.codex/auth.json`) is left untouched during startup; only the
 //! provider block in `config.toml` is temporarily pointed at the remote CPA.
 
-use std::{collections::BTreeMap, thread, time::Duration};
+use std::{collections::BTreeMap, fs, thread, time::Duration};
 
 use quotio_types::{
     AgentConfigMode, AgentConfigStorageOption, AgentConfigurationRequest, AgentSetupMode,
@@ -87,6 +87,51 @@ fn fetch_remote_api_keys_now(core: &AppCore) -> Result<Vec<String>, ManagementCo
         .map(|key| key.trim().to_string())
         .filter(|key| !key.is_empty())
         .collect())
+}
+
+/// Remote CPA already authenticates the Codex request with the selected CPA API
+/// key (`experimental_bearer_token`). Asking Codex to additionally require
+/// OpenAI authentication makes the desktop app stop at the ChatGPT sign-in
+/// screen, which defeats Remote mode. The shared Codex config generator keeps
+/// `requires_openai_auth = true` for the original local-CPA flow, so Remote mode
+/// flips only its own managed provider section to `false` immediately after the
+/// temporary config is written.
+fn disable_openai_auth_for_remote_codex() -> Result<(), ManagementCoreError> {
+    let path = quotio_platform::expand_home_path("~/.codex/config.toml");
+    let content = fs::read_to_string(&path).map_err(|error| {
+        ManagementCoreError::Unavailable(format!("读取 Codex config.toml 失败：{error}"))
+    })?;
+
+    let mut output = String::with_capacity(content.len());
+    let mut in_cliproxyapi = false;
+    let mut changed = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            let section = trimmed.trim_start_matches('[').trim_end_matches(']');
+            in_cliproxyapi = section == "model_providers.cliproxyapi";
+        }
+
+        if in_cliproxyapi && trimmed.starts_with("requires_openai_auth") {
+            output.push_str("requires_openai_auth = false\n");
+            changed = true;
+        } else {
+            output.push_str(line);
+            output.push('\n');
+        }
+    }
+
+    if !changed {
+        return Err(ManagementCoreError::Unavailable(
+            "未找到 Codex 的 model_providers.cliproxyapi.requires_openai_auth 配置".to_string(),
+        ));
+    }
+
+    fs::write(&path, output).map_err(|error| {
+        ManagementCoreError::Unavailable(format!("写入 Codex config.toml 失败：{error}"))
+    })?;
+    Ok(())
 }
 
 impl AppCore {
@@ -210,10 +255,11 @@ impl AppCore {
                 reasoning_effort: profile.reasoning.clone(),
             };
             agent_config::write_codex_proxy_config_no_backup_unlocked(&request)?;
+            disable_openai_auth_for_remote_codex()?;
 
-            // Keep the current auth.json exactly as-is. Existing local Codex login
-            // is only used to let the desktop app open; inference goes to the
-            // remote CPA provider written above.
+            // Remote CPA + its selected API key is the complete authentication
+            // chain. Keep auth.json untouched; unlike local mode, Remote mode must
+            // not require any ChatGPT/OpenAI login on this Windows machine.
             let _ = codex_session_visibility::repair_session_visibility_in_default_dir_no_backup_unlocked();
 
             let use_dream_skin =
