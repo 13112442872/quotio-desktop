@@ -575,6 +575,12 @@ impl AppCore {
         // 「退出时保留代理」:整套代理栈 + 账号绑定 / 调度状态原样保留,只关 UI 窗口,让正在
         // 连着本地代理的 Codex 等客户端不会因断连被拖崩。下次启动 Quotio 会探测并接管仍在
         // 运行的那个代理(refresh 里的 adopt 逻辑)。
+        // Remote CPA mode is a persistent Codex deployment. Closing Quotio must
+        // not kill Codex and must not restore/remove the managed cliproxyapi
+        // provider. Users can still restore explicitly from the Agents page.
+        if matches!(self.settings.connection_mode, ConnectionMode::Remote) {
+            return;
+        }
         if self.settings.keep_proxy_on_exit {
             return;
         }
