@@ -27,48 +27,13 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Apply maintained main patches
+      - name: Apply one-shot main patch
         shell: pwsh
         run: |
           if (Test-Path "scripts/apply_main_polish.py") {
             python scripts/apply_main_polish.py
-          }
-
-          # Remote CPA is a persistent Codex deployment: quitting Quotio must not
-          # kill Codex or restore/remove the cliproxyapi provider. The explicit
-          # "恢复原 Codex 配置" action still calls codex_stop and restores on demand.
-          $path = "crates/quotio-core/src/lib.rs"
-          $source = [System.IO.File]::ReadAllText($path).Replace("`r`n", "`n")
-          $old = @'
-        if self.settings.keep_proxy_on_exit {
-            return;
-        }
-        if let Err(error) = self.finish_codex_session_unlocked(true) {
-'@.Replace("`r`n", "`n")
-          $new = @'
-        // Remote CPA mode is a persistent Codex deployment. Closing Quotio must
-        // not kill Codex and must not restore/remove the managed cliproxyapi
-        // provider. Users can still restore explicitly from the Agents page.
-        if matches!(self.settings.connection_mode, ConnectionMode::Remote) {
-            return;
-        }
-        if self.settings.keep_proxy_on_exit {
-            return;
-        }
-        if let Err(error) = self.finish_codex_session_unlocked(true) {
-'@.Replace("`r`n", "`n")
-          if ($source.Contains($old)) {
-            $source = $source.Replace($old, $new)
-            [System.IO.File]::WriteAllText(
-              $path,
-              $source,
-              [System.Text.UTF8Encoding]::new($false)
-            )
-            Write-Host "Applied Remote CPA persistent-exit behavior."
-          } elseif ($source.Contains("Remote CPA mode is a persistent Codex deployment")) {
-            Write-Host "Remote CPA persistent-exit behavior already applied."
           } else {
-            throw "Could not locate shutdown_unlocked patch anchor in quotio-core/src/lib.rs"
+            Write-Host "No one-shot patcher present; building current main as-is."
           }
 
       - name: Install Rust
@@ -145,7 +110,7 @@ jobs:
       - name: Commit validated main source changes
         shell: pwsh
         run: |
-          # One-shot patchers are removed after their source changes validate.
+          # The patcher is one-shot; keep only validated real source changes.
           Remove-Item "scripts/apply_main_polish.py" -ErrorAction SilentlyContinue
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
