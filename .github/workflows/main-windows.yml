@@ -27,13 +27,48 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Apply one-shot main polish patch
+      - name: Apply maintained main patches
         shell: pwsh
         run: |
           if (Test-Path "scripts/apply_main_polish.py") {
             python scripts/apply_main_polish.py
+          }
+
+          # Remote CPA is a persistent Codex deployment: quitting Quotio must not
+          # kill Codex or restore/remove the cliproxyapi provider. The explicit
+          # "恢复原 Codex 配置" action still calls codex_stop and restores on demand.
+          $path = "crates/quotio-core/src/lib.rs"
+          $source = [System.IO.File]::ReadAllText($path).Replace("`r`n", "`n")
+          $old = @'
+        if self.settings.keep_proxy_on_exit {
+            return;
+        }
+        if let Err(error) = self.finish_codex_session_unlocked(true) {
+'@.Replace("`r`n", "`n")
+          $new = @'
+        // Remote CPA mode is a persistent Codex deployment. Closing Quotio must
+        // not kill Codex and must not restore/remove the managed cliproxyapi
+        // provider. Users can still restore explicitly from the Agents page.
+        if matches!(self.settings.connection_mode, ConnectionMode::Remote) {
+            return;
+        }
+        if self.settings.keep_proxy_on_exit {
+            return;
+        }
+        if let Err(error) = self.finish_codex_session_unlocked(true) {
+'@.Replace("`r`n", "`n")
+          if ($source.Contains($old)) {
+            $source = $source.Replace($old, $new)
+            [System.IO.File]::WriteAllText(
+              $path,
+              $source,
+              [System.Text.UTF8Encoding]::new($false)
+            )
+            Write-Host "Applied Remote CPA persistent-exit behavior."
+          } elseif ($source.Contains("Remote CPA mode is a persistent Codex deployment")) {
+            Write-Host "Remote CPA persistent-exit behavior already applied."
           } else {
-            Write-Host "No one-shot patcher present; building current main as-is."
+            throw "Could not locate shutdown_unlocked patch anchor in quotio-core/src/lib.rs"
           }
 
       - name: Install Rust
@@ -110,11 +145,12 @@ jobs:
       - name: Commit validated main source changes
         shell: pwsh
         run: |
-          # The patcher is one-shot; keep only real source + the permanent main CI.
+          # One-shot patchers are removed after their source changes validate.
           Remove-Item "scripts/apply_main_polish.py" -ErrorAction SilentlyContinue
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A -- `
+            crates/quotio-core/src/lib.rs `
             apps/desktop/src/i18n.tsx `
             apps/desktop/src/components/sections/SettingsScreen.tsx `
             apps/desktop/src/components/AppShell.tsx `
@@ -124,7 +160,7 @@ jobs:
           if (git diff --cached --quiet) {
             Write-Host "No source changes to commit"
           } else {
-            git commit -m "fix: polish first-run locale and fork update source"
+            git commit -m "fix: keep remote CPA Codex config after Quotio exits"
             git push origin HEAD:main
           }
 
